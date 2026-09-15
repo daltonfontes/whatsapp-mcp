@@ -6,7 +6,9 @@ import (
 	_ "embed"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"go.mau.fi/whatsmeow/types"
@@ -113,6 +115,56 @@ func (store *MessageStore) ListMessages(account, chatJID string, limit int) ([]M
 	return out, rows.Err()
 }
 
+type Model struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Context int    `json:"context_length"`
+}
+
+var modelsCache struct {
+	sync.Mutex
+	at   time.Time
+	list []Model
+}
+
+// freeModels lists OpenRouter models with zero prompt and completion price, cached for an hour.
+func freeModels() ([]Model, error) {
+	modelsCache.Lock()
+	defer modelsCache.Unlock()
+	if modelsCache.list != nil && time.Since(modelsCache.at) < time.Hour {
+		return modelsCache.list, nil
+	}
+	client := http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get("https://openrouter.ai/api/v1/models")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Data []struct {
+			ID            string `json:"id"`
+			Name          string `json:"name"`
+			ContextLength int    `json:"context_length"`
+			Pricing       struct {
+				Prompt     string `json:"prompt"`
+				Completion string `json:"completion"`
+			} `json:"pricing"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	list := []Model{}
+	for _, m := range body.Data {
+		if m.Pricing.Prompt == "0" && m.Pricing.Completion == "0" {
+			list = append(list, Model{m.ID, m.Name, m.ContextLength})
+		}
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
+	modelsCache.at, modelsCache.list = time.Now(), list
+	return list, nil
+}
+
 func limitParam(r *http.Request, def int) int {
 	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n <= 500 {
 		return n
@@ -147,6 +199,15 @@ func registerPanel(mux *http.ServeMux, bridge *Bridge) {
 	fail := func(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
+
+	mux.HandleFunc("GET /api/models", func(w http.ResponseWriter, r *http.Request) {
+		list, err := freeModels()
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	})
 
 	mux.HandleFunc("GET /api/accounts/{id}/bot", func(w http.ResponseWriter, r *http.Request) {
 		c, err := store.GetBotConfig(r.PathValue("id"))
