@@ -1,0 +1,27 @@
+name: whatsapp
+services:
+  bridge:
+    build: ./whatsapp-bridge
+    image: whatsapp-bridge
+    volumes: ["store:/app/whatsapp-bridge/store"]
+    restart: unless-stopped
+  mcp:
+    build: ./whatsapp-mcp-server
+    image: whatsapp-mcp
+    volumes: ["store:/app/whatsapp-bridge/store"]
+    profiles: ["mcp"]
+  bot:
+    build: ./whatsapp-mcp-server
+    image: whatsapp-mcp
+    command: ["uv", "run", "--frozen", "bot.py"]
+    environment:
+      BOT_ALLOWED: ""  # vazio = responde todo mundo
+      BOT_MODEL: "@preset/whatsapp-responde"
+      BOT_SESSION_GAP: "6"  # horas sem msg = conversa nova, historico antigo e descartado
+      TZ: "America/Sao_Paulo"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
+    volumes: ["store:/app/whatsapp-bridge/store"]
+    depends_on: [bridge]
+    restart: unless-stopped
+volumes:
+  store:
