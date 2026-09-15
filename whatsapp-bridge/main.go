@@ -106,6 +106,7 @@ func migrate(db *sql.DB) error {
 	defer conn.Close()
 	_, err = conn.ExecContext(context.Background(), `
 		PRAGMA foreign_keys = OFF;
+		BEGIN;
 		ALTER TABLE messages RENAME TO messages_old;
 		ALTER TABLE chats RENAME TO chats_old;
 		`+schemaSQL+`
@@ -114,6 +115,7 @@ func migrate(db *sql.DB) error {
 			SELECT id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, url, media_key, file_sha256, file_enc_sha256, file_length FROM messages_old;
 		DROP TABLE messages_old;
 		DROP TABLE chats_old;
+		COMMIT;
 		PRAGMA foreign_keys = ON;
 	`)
 	return err
