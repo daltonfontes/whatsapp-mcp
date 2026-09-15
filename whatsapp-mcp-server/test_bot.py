@@ -1,0 +1,33 @@
+"""python test_bot.py: comandos de pausa e config por conta, em memoria."""
+import sqlite3
+
+import bot
+
+
+def test_commands():
+    db = sqlite3.connect(":memory:")
+    db.executescript(bot.SCHEMA)
+    a, c = "5511", "5522@s.whatsapp.net"
+    assert bot.handle_command(db, a, c, "oi, tudo bem?") is None
+    assert bot.config(db, a)["enabled"] and not bot.is_paused(db, a, c)
+
+    assert bot.handle_command(db, a, c, "/pausar")
+    assert bot.is_paused(db, a, c)
+    assert bot.handle_command(db, a, c, " /Voltar ")
+    assert not bot.is_paused(db, a, c)
+
+    assert bot.handle_command(db, a, f"{a}@s.whatsapp.net", "/pausar +55 22")  # de outro chat, mirando o numero
+    assert bot.is_paused(db, a, c)
+    assert bot.handle_command(db, a, f"{a}@s.whatsapp.net", "/voltar 5522")
+    assert not bot.is_paused(db, a, c)
+
+    assert bot.handle_command(db, a, c, "/pausar tudo")
+    assert not bot.config(db, a)["enabled"]
+    assert bot.handle_command(db, a, c, "/voltar tudo")
+    assert bot.config(db, a)["enabled"]
+    assert bot.is_paused(db, "outra", c) is False  # pausa e por conta
+
+
+if __name__ == "__main__":
+    test_commands()
+    print("ok")
