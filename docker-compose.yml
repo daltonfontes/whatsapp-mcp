@@ -20,7 +20,8 @@ services:
     command: ["uv", "run", "--frozen", "bot.py"]
     environment:
       BOT_ALLOWED: ""  # vazio = responde todo mundo
-      BOT_MODEL: "@preset/whatsapp-responde"
+      BOT_MODEL: "@preset/whatsapp-responde"  # defaults so para conta nova; depois vale a tabela bot_accounts
+      BOT_SYSTEM_PROMPT: ""
       BOT_SESSION_GAP: "6"  # horas sem msg = conversa nova, historico antigo e descartado
       TZ: "America/Sao_Paulo"
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"

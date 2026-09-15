@@ -131,6 +131,21 @@ Set `BRIDGE_TOKEN` to require `Authorization: Bearer <token>` on every route. Th
 
 Existing single-account databases are migrated on first start: `chats` and `messages` gain an `account_id` column and the rows are assigned to the only paired account. Downloaded media moves to `store/<account>/<chat>/`.
 
+### Auto-reply bot
+
+`whatsapp-mcp-server/bot.py` (the `bot` service in `docker-compose.yml`) polls `messages.db` and answers incoming messages through OpenRouter. Configuration is per account in the `bot_accounts` table, which the bot creates: `enabled`, `model`, `system_prompt`, `allowed` (comma-separated numbers, empty means everyone). A new account gets the `BOT_MODEL`, `BOT_SYSTEM_PROMPT` and `BOT_ALLOWED` env values as its initial row.
+
+Control it from the account's own phone by sending these as normal messages. The confirmation arrives in your chat with yourself.
+
+| Command | Effect |
+|---------|--------|
+| `/pausar` | Stop replying in the chat where it was sent |
+| `/voltar` | Resume replying in that chat |
+| `/pausar 5511999...` | Stop replying to that number, from any chat |
+| `/voltar 5511999...` | Resume replying to that number |
+| `/pausar tudo` | Pause the whole account |
+| `/voltar tudo` | Resume the whole account |
+
 ### Data Storage
 
 - All message history is stored in a SQLite database within the `whatsapp-bridge/store/` directory
