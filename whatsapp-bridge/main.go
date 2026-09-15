@@ -62,6 +62,20 @@ const schemaSQL = `
 		PRIMARY KEY (account_id, id, chat_jid),
 		FOREIGN KEY (account_id, chat_jid) REFERENCES chats(account_id, jid)
 	);
+
+	-- Bot config, shared with whatsapp-mcp-server/bot.py (same DDL there).
+	CREATE TABLE IF NOT EXISTS bot_accounts (
+		account_id TEXT PRIMARY KEY,
+		enabled INTEGER NOT NULL DEFAULT 1,
+		model TEXT NOT NULL,
+		system_prompt TEXT NOT NULL DEFAULT '',
+		allowed TEXT NOT NULL DEFAULT ''
+	);
+	CREATE TABLE IF NOT EXISTS bot_paused_chats (
+		account_id TEXT,
+		chat_jid TEXT,
+		PRIMARY KEY (account_id, chat_jid)
+	);
 `
 
 // Initialize message store
@@ -89,13 +103,10 @@ func migrate(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	if n == 1 {
-		return nil // already current
-	}
 	var hasOld int
 	db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'chats'").Scan(&hasOld)
-	if hasOld == 0 {
-		_, err = db.Exec(schemaSQL)
+	if n == 1 || hasOld == 0 {
+		_, err = db.Exec(schemaSQL) // current or fresh: everything is IF NOT EXISTS
 		return err
 	}
 	// Single connection so PRAGMA foreign_keys=off applies to the whole rebuild.
@@ -106,6 +117,7 @@ func migrate(db *sql.DB) error {
 	defer conn.Close()
 	_, err = conn.ExecContext(context.Background(), `
 		PRAGMA foreign_keys = OFF;
+		BEGIN;
 		ALTER TABLE messages RENAME TO messages_old;
 		ALTER TABLE chats RENAME TO chats_old;
 		`+schemaSQL+`
@@ -114,6 +126,7 @@ func migrate(db *sql.DB) error {
 			SELECT id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, url, media_key, file_sha256, file_enc_sha256, file_length FROM messages_old;
 		DROP TABLE messages_old;
 		DROP TABLE chats_old;
+		COMMIT;
 		PRAGMA foreign_keys = ON;
 	`)
 	return err
@@ -767,10 +780,17 @@ func startRESTServer(bridge *Bridge, port int) {
 		})
 	})
 
+	registerPanel(mux, bridge)
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(panelHTML)
+	})
+
 	handler := http.Handler(mux)
 	if token := os.Getenv("BRIDGE_TOKEN"); token != "" {
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Authorization") != "Bearer "+token {
+			// The page itself is static and public; every /api call needs the token.
+			if r.URL.Path != "/" && r.Header.Get("Authorization") != "Bearer "+token {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}

@@ -1,0 +1,206 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	_ "embed"
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"time"
+
+	"go.mau.fi/whatsmeow/types"
+)
+
+// Panel: static page at / plus the bot-config and chat endpoints it needs.
+// The bot tables are shared with whatsapp-mcp-server/bot.py, which reads them on every reply.
+
+//go:embed panel.html
+var panelHTML []byte
+
+type BotConfig struct {
+	Exists       bool   `json:"exists"` // false = bot will seed this row from its env defaults
+	Enabled      bool   `json:"enabled"`
+	Model        string `json:"model"`
+	SystemPrompt string `json:"system_prompt"`
+	Allowed      string `json:"allowed"`
+}
+
+type ChatRow struct {
+	JID             string    `json:"jid"`
+	Phone           string    `json:"phone"` // resolved from the LID map for @lid chats
+	Name            string    `json:"name"`
+	LastMessageTime time.Time `json:"last_message_time"`
+	LastMessage     string    `json:"last_message"`
+	Paused          bool      `json:"paused"`
+}
+
+type MessageRow struct {
+	ID        string    `json:"id"`
+	Sender    string    `json:"sender"`
+	Content   string    `json:"content"`
+	Time      time.Time `json:"time"`
+	FromMe    bool      `json:"from_me"`
+	MediaType string    `json:"media_type"`
+}
+
+func (store *MessageStore) GetBotConfig(account string) (BotConfig, error) {
+	c := BotConfig{Enabled: true}
+	err := store.db.QueryRow(
+		"SELECT enabled, model, system_prompt, allowed FROM bot_accounts WHERE account_id = ?", account,
+	).Scan(&c.Enabled, &c.Model, &c.SystemPrompt, &c.Allowed)
+	if err == sql.ErrNoRows {
+		return c, nil
+	}
+	c.Exists = true
+	return c, err
+}
+
+func (store *MessageStore) SetBotConfig(account string, c BotConfig) error {
+	_, err := store.db.Exec(
+		"INSERT OR REPLACE INTO bot_accounts (account_id, enabled, model, system_prompt, allowed) VALUES (?, ?, ?, ?, ?)",
+		account, c.Enabled, c.Model, c.SystemPrompt, c.Allowed,
+	)
+	return err
+}
+
+func (store *MessageStore) SetPaused(account, chatJID string, paused bool) error {
+	q := "DELETE FROM bot_paused_chats WHERE account_id = ? AND chat_jid = ?"
+	if paused {
+		q = "INSERT OR IGNORE INTO bot_paused_chats (account_id, chat_jid) VALUES (?, ?)"
+	}
+	_, err := store.db.Exec(q, account, chatJID)
+	return err
+}
+
+func (store *MessageStore) ListChats(account string, limit int) ([]ChatRow, error) {
+	rows, err := store.db.Query(`
+		SELECT c.jid, COALESCE(c.name, ''), c.last_message_time,
+			COALESCE((SELECT content FROM messages m WHERE m.account_id = c.account_id AND m.chat_jid = c.jid ORDER BY m.timestamp DESC LIMIT 1), ''),
+			EXISTS(SELECT 1 FROM bot_paused_chats p WHERE p.account_id = c.account_id AND p.chat_jid = c.jid)
+		FROM chats c WHERE c.account_id = ? ORDER BY c.last_message_time DESC LIMIT ?`, account, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ChatRow{}
+	for rows.Next() {
+		var c ChatRow
+		if err := rows.Scan(&c.JID, &c.Name, &c.LastMessageTime, &c.LastMessage, &c.Paused); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (store *MessageStore) ListMessages(account, chatJID string, limit int) ([]MessageRow, error) {
+	rows, err := store.db.Query(`
+		SELECT id, sender, content, timestamp, is_from_me, COALESCE(media_type, '') FROM messages
+		WHERE account_id = ? AND chat_jid = ? ORDER BY timestamp DESC LIMIT ?`, account, chatJID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []MessageRow{}
+	for rows.Next() {
+		var m MessageRow
+		if err := rows.Scan(&m.ID, &m.Sender, &m.Content, &m.Time, &m.FromMe, &m.MediaType); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func limitParam(r *http.Request, def int) int {
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n <= 500 {
+		return n
+	}
+	return def
+}
+
+// resolvePhones fills ChatRow.Phone for @lid chats using the account's LID map.
+func resolvePhones(bridge *Bridge, account string, chats []ChatRow) {
+	client, err := bridge.Client(account)
+	if err != nil {
+		return
+	}
+	for i, c := range chats {
+		jid, err := types.ParseJID(c.JID)
+		if err != nil {
+			continue
+		}
+		switch jid.Server {
+		case types.DefaultUserServer:
+			chats[i].Phone = jid.User
+		case types.HiddenUserServer:
+			if pn, err := client.Store.LIDs.GetPNForLID(context.Background(), jid); err == nil && !pn.IsEmpty() {
+				chats[i].Phone = pn.User
+			}
+		}
+	}
+}
+
+func registerPanel(mux *http.ServeMux, bridge *Bridge) {
+	store := bridge.store
+	fail := func(w http.ResponseWriter, err error) {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	mux.HandleFunc("GET /api/accounts/{id}/bot", func(w http.ResponseWriter, r *http.Request) {
+		c, err := store.GetBotConfig(r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, c)
+	})
+
+	mux.HandleFunc("PUT /api/accounts/{id}/bot", func(w http.ResponseWriter, r *http.Request) {
+		var c BotConfig
+		if err := json.NewDecoder(r.Body).Decode(&c); err != nil || c.Model == "" {
+			http.Error(w, "enabled, model (required), system_prompt and allowed expected", http.StatusBadRequest)
+			return
+		}
+		if err := store.SetBotConfig(r.PathValue("id"), c); err != nil {
+			fail(w, err)
+			return
+		}
+		c.Exists = true
+		writeJSON(w, http.StatusOK, c)
+	})
+
+	mux.HandleFunc("GET /api/accounts/{id}/chats", func(w http.ResponseWriter, r *http.Request) {
+		chats, err := store.ListChats(r.PathValue("id"), limitParam(r, 50))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		resolvePhones(bridge, r.PathValue("id"), chats)
+		writeJSON(w, http.StatusOK, chats)
+	})
+
+	mux.HandleFunc("GET /api/accounts/{id}/chats/{jid}/messages", func(w http.ResponseWriter, r *http.Request) {
+		msgs, err := store.ListMessages(r.PathValue("id"), r.PathValue("jid"), limitParam(r, 50))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, msgs)
+	})
+
+	for _, m := range []struct {
+		method string
+		paused bool
+	}{{"PUT", true}, {"DELETE", false}} {
+		paused := m.paused
+		mux.HandleFunc(m.method+" /api/accounts/{id}/chats/{jid}/paused", func(w http.ResponseWriter, r *http.Request) {
+			if err := store.SetPaused(r.PathValue("id"), r.PathValue("jid"), paused); err != nil {
+				fail(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]bool{"paused": paused})
+		})
+	}
+}

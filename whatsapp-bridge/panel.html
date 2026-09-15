@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WhatsApp Bot</title>
+<style>
+  :root { --bg: #f4f5f7; --card: #fff; --line: #dfe3e8; --text: #1f2933; --muted: #6b7280; --accent: #128c7e; --danger: #b91c1c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--text); background: var(--bg); }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--accent); color: #fff; }
+  header h1 { font-size: 16px; margin: 0; flex: 1; }
+  header button { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.6); }
+  main { display: grid; grid-template-columns: 260px 1fr; gap: 16px; padding: 16px; max-width: 1200px; margin: 0 auto; }
+  @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+  aside, section { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+  h2 { font-size: 15px; margin: 0 0 10px; } h3 { font-size: 14px; margin: 20px 0 8px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { padding: 8px 10px; border-radius: 6px; cursor: pointer; display: flex; gap: 8px; align-items: center; }
+  li:hover { background: var(--bg); } li.active { background: #e6f4f1; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; flex: none; }
+  .dot.on { background: #16a34a; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { font-size: 11px; padding: 1px 6px; border-radius: 10px; background: #fee2e2; color: var(--danger); }
+  button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+  button.secondary { background: #fff; color: var(--accent); }
+  button.danger { background: #fff; color: var(--danger); border-color: var(--danger); }
+  label { display: block; margin: 10px 0 4px; font-weight: 600; }
+  input[type=text], textarea { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  textarea { resize: vertical; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  #qr { width: 240px; height: 240px; display: block; margin: 12px auto; }
+  #msgs { max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: var(--bg); }
+  .msg { max-width: 80%; padding: 6px 10px; border-radius: 8px; margin: 4px 0; background: #fff; white-space: pre-wrap; word-break: break-word; }
+  .msg.me { margin-left: auto; background: #dcf8c6; }
+  .msg .muted { display: block; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WhatsApp Bot</h1>
+  <span id="status" class="muted" style="color:#fff"></span>
+  <button id="tokenBtn" title="BRIDGE_TOKEN">token</button>
+</header>
+<main>
+  <aside>
+    <h2>Contas</h2>
+    <ul id="accounts"></ul>
+    <div class="row"><button id="newAcc" class="secondary">+ Nova conta</button></div>
+    <div id="login" hidden>
+      <img id="qr" alt="QR code">
+      <p id="loginMsg" class="muted">Abra o WhatsApp no celular › Dispositivos conectados › Conectar dispositivo.</p>
+    </div>
+  </aside>
+
+  <section id="acc" hidden>
+    <h2 id="accTitle"></h2>
+    <form id="cfg">
+      <label><input type="checkbox" name="enabled"> Bot ligado</label>
+      <p id="cfgHint" class="muted" hidden>Esta conta ainda não tem configuração salva: o bot vai usar os valores padrão do ambiente até você salvar aqui.</p>
+      <label for="model">Modelo</label>
+      <input type="text" id="model" name="model" required placeholder="@preset/whatsapp-responde ou openai/gpt-4o-mini">
+      <label for="system_prompt">System prompt</label>
+      <textarea id="system_prompt" name="system_prompt" rows="7" placeholder="Você é o atendimento da loja X..."></textarea>
+      <label for="allowed">Só responde para</label>
+      <input type="text" id="allowed" name="allowed" placeholder="números separados por vírgula; vazio = todo mundo">
+      <div class="row">
+        <button type="submit">Salvar</button>
+        <button type="button" id="logout" class="danger">Desconectar conta</button>
+        <span id="cfgMsg" class="muted"></span>
+      </div>
+    </form>
+
+    <h3>Chats <span id="chatsCount" class="muted"></span></h3>
+    <ul id="chats"></ul>
+
+    <div id="chat" hidden>
+      <h3 id="chatTitle"></h3>
+      <div class="row"><button id="togglePause" class="secondary"></button></div>
+      <div id="msgs"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = t => new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+// Name from the bridge is often just the LID digits; prefer the resolved phone, then a real name.
+const chatLabel = c => {
+  const id = c.jid.split('@')[0];
+  const name = c.name && c.name !== id ? c.name : '';
+  if (c.jid.endsWith('@g.us')) return name || 'Grupo ' + id;
+  return name ? `${name} (${c.phone || id})` : (c.phone ? '+' + c.phone : id);
+};
+let token = localStorage.getItem('bridge_token') || '';
+let current = null, currentChat = null, chatsCache = [];
+
+async function api(method, path, body) {
+  const r = await fetch(path, {
+    method, headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (r.status === 401) {
+    const t = prompt('Informe o BRIDGE_TOKEN do bridge:');
+    if (t === null) throw new Error('sem token');
+    token = t; localStorage.setItem('bridge_token', token);
+    return api(method, path, body);
+  }
+  if (!r.ok) throw new Error((await r.text()) || ('HTTP ' + r.status));
+  return r.json();
+}
+const flash = (el, msg, ms = 2500) => { el.textContent = msg; setTimeout(() => el.textContent = '', ms); };
+
+async function loadAccounts() {
+  const accs = await api('GET', '/api/accounts');
+  $('#accounts').innerHTML = accs.map(a => `
+    <li data-id="${esc(a.id)}" class="${a.id === current ? 'active' : ''}">
+      <span class="dot ${a.connected ? 'on' : ''}"></span><span class="grow">${esc(a.id)}</span>
+    </li>`).join('') || '<li class="muted">Nenhuma conta ainda</li>';
+  $('#status').textContent = accs.length + ' conta(s)';
+  if (!current && accs.length) select(accs[0].id);
+}
+
+async function select(id) {
+  current = id; currentChat = null;
+  $('#chat').hidden = true;
+  document.querySelectorAll('#accounts li').forEach(li => li.classList.toggle('active', li.dataset.id === id));
+  $('#acc').hidden = false;
+  $('#accTitle').textContent = 'Conta ' + id;
+  const c = await api('GET', `/api/accounts/${encodeURIComponent(id)}/bot`);
+  const f = $('#cfg');
+  f.enabled.checked = c.enabled; f.model.value = c.model; f.system_prompt.value = c.system_prompt; f.allowed.value = c.allowed;
+  $('#cfgHint').hidden = c.exists;
+  await loadChats();
+}
+
+async function loadChats() {
+  chatsCache = await api('GET', `/api/accounts/${encodeURIComponent(current)}/chats?limit=100`);
+  $('#chatsCount').textContent = chatsCache.length ? `(${chatsCache.length})` : '';
+  $('#chats').innerHTML = chatsCache.map(c => `
+    <li data-jid="${esc(c.jid)}" class="${c.jid === currentChat ? 'active' : ''}">
+      <span class="grow"><b>${esc(chatLabel(c))}</b> <span class="muted">${esc(c.last_message)}</span></span>
+      ${c.paused ? '<span class="badge">pausado</span>' : ''}
+      <span class="muted">${fmt(c.last_message_time)}</span>
+    </li>`).join('') || '<li class="muted">Sem conversas ainda</li>';
+}
+
+async function openChat(jid) {
+  currentChat = jid;
+  const c = chatsCache.find(x => x.jid === jid);
+  $('#chatTitle').textContent = c ? chatLabel(c) : jid;
+  $('#togglePause').textContent = c && c.paused ? '▶ Voltar a responder' : '⏸ Pausar o bot neste chat';
+  document.querySelectorAll('#chats li').forEach(li => li.classList.toggle('active', li.dataset.jid === jid));
+  const msgs = await api('GET', `/api/accounts/${encodeURIComponent(current)}/chats/${encodeURIComponent(jid)}/messages?limit=60`);
+  $('#msgs').innerHTML = msgs.reverse().map(m => `
+    <div class="msg ${m.from_me ? 'me' : ''}">${m.media_type ? `<i>[${esc(m.media_type)}]</i> ` : ''}${esc(m.content)}
+      <span class="muted">${m.from_me ? 'você' : esc(m.sender)} · ${fmt(m.time)}</span></div>`).join('');
+  $('#chat').hidden = false;
+  $('#msgs').scrollTop = $('#msgs').scrollHeight;
+}
+
+$('#accounts').onclick = e => { const li = e.target.closest('li[data-id]'); if (li) select(li.dataset.id); };
+$('#chats').onclick = e => { const li = e.target.closest('li[data-jid]'); if (li) openChat(li.dataset.jid); };
+
+$('#cfg').onsubmit = async e => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api('PUT', `/api/accounts/${encodeURIComponent(current)}/bot`,
+      { enabled: f.enabled.checked, model: f.model.value.trim(), system_prompt: f.system_prompt.value, allowed: f.allowed.value.replace(/\s/g, '') });
+    $('#cfgHint').hidden = true;
+    flash($('#cfgMsg'), 'Salvo. O bot já usa a nova configuração.');
+  } catch (err) { flash($('#cfgMsg'), 'Erro: ' + err.message, 6000); }
+};
+
+$('#logout').onclick = async () => {
+  if (!confirm(`Desconectar a conta ${current}? Ela sai do WhatsApp deste servidor e precisa de novo QR para voltar.`)) return;
+  await api('DELETE', `/api/accounts/${encodeURIComponent(current)}`);
+  current = null; $('#acc').hidden = true;
+  loadAccounts();
+};
+
+$('#togglePause').onclick = async () => {
+  const c = chatsCache.find(x => x.jid === currentChat);
+  await api(c && c.paused ? 'DELETE' : 'PUT', `/api/accounts/${encodeURIComponent(current)}/chats/${encodeURIComponent(currentChat)}/paused`);
+  await loadChats();
+  openChat(currentChat);
+};
+
+$('#newAcc').onclick = async () => {
+  const { login_id } = await api('POST', '/api/accounts');
+  $('#login').hidden = false; $('#qr').removeAttribute('src');
+  $('#loginMsg').textContent = 'Gerando QR code...';
+  const timer = setInterval(async () => {
+    let l;
+    try { l = await api('GET', `/api/logins/${login_id}`); } catch { clearInterval(timer); $('#loginMsg').textContent = 'Login expirou. Tente de novo.'; return; }
+    if (l.qr) { $('#qr').src = l.qr; $('#loginMsg').textContent = 'Abra o WhatsApp no celular › Dispositivos conectados › Conectar dispositivo.'; }
+    if (l.status === 'success') { clearInterval(timer); $('#login').hidden = true; current = null; await loadAccounts(); select(l.account); }
+    else if (l.status !== 'pending') { clearInterval(timer); $('#loginMsg').textContent = 'Falhou: ' + (l.error || l.status) + '. Tente de novo.'; }
+  }, 2000);
+};
+
+$('#tokenBtn').onclick = () => {
+  const t = prompt('BRIDGE_TOKEN (vazio = sem autenticação):', token);
+  if (t !== null) { token = t; localStorage.setItem('bridge_token', token); loadAccounts(); }
+};
+
+loadAccounts().catch(err => $('#status').textContent = err.message);
+setInterval(() => loadAccounts().catch(() => {}), 15000);
+</script>
+</body>
+</html>
