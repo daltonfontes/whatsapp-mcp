@@ -16,10 +16,11 @@ def test_commands():
     assert bot.handle_command(db, a, c, " /Voltar ")
     assert not bot.is_paused(db, a, c)
 
+    bot.lid_of = lambda n: "999" if n == "5522" else None  # sem whatsapp.db no teste
     assert bot.handle_command(db, a, f"{a}@s.whatsapp.net", "/pausar +55 22")  # de outro chat, mirando o numero
-    assert bot.is_paused(db, a, c)
+    assert bot.is_paused(db, a, c) and bot.is_paused(db, a, "999@lid")  # pausa o chat por numero e por LID
     assert bot.handle_command(db, a, f"{a}@s.whatsapp.net", "/voltar 5522")
-    assert not bot.is_paused(db, a, c)
+    assert not bot.is_paused(db, a, c) and not bot.is_paused(db, a, "999@lid")
 
     assert bot.handle_command(db, a, c, "/pausar tudo")
     assert not bot.config(db, a)["enabled"]

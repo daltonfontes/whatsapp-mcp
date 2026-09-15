@@ -64,6 +64,22 @@ def is_paused(db, account: str, chat: str) -> bool:
     return db.execute("SELECT 1 FROM bot_paused_chats WHERE account_id = ? AND chat_jid = ?", (account, chat)).fetchone() is not None
 
 
+def lid_of(number: str) -> str | None:
+    """Numero -> LID pela tabela do whatsmeow. Quase todo chat privado hoje chega como <lid>@lid."""
+    row = sqlite3.connect(SESSION_DB_PATH, timeout=10).execute(
+        "SELECT lid FROM whatsmeow_lid_map WHERE pn = ?", (number,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+def chat_jids(number: str) -> list[str]:
+    """Os JIDs pelos quais o chat com esse numero pode aparecer no messages.db."""
+    jids = [f"{number}@s.whatsapp.net"]
+    if lid := lid_of(number):
+        jids.append(f"{lid}@lid")
+    return jids
+
+
 def handle_command(db, account: str, chat: str, text: str) -> str | None:
     """Comando enviado pelo dono da conta. Devolve a confirmacao, ou None se nao e comando."""
     parts = text.strip().lower().split()
@@ -76,13 +92,16 @@ def handle_command(db, account: str, chat: str, text: str) -> str | None:
         db.execute("UPDATE bot_accounts SET enabled = ? WHERE account_id = ?", (0 if pause else 1, account))
         msg = "bot pausado em todos os chats" if pause else "bot religado em todos os chats"
     else:
+        chats, label = [chat], chat.split("@")[0]
         if target:
-            chat = "".join(filter(str.isdigit, target)) + "@s.whatsapp.net"
-        if pause:
-            db.execute("INSERT OR IGNORE INTO bot_paused_chats VALUES (?, ?)", (account, chat))
-        else:
-            db.execute("DELETE FROM bot_paused_chats WHERE account_id = ? AND chat_jid = ?", (account, chat))
-        msg = f"bot {'pausado' if pause else 'de volta'} no chat {chat.split('@')[0]}"
+            label = "".join(filter(str.isdigit, target))
+            chats = chat_jids(label)
+        for c in chats:
+            if pause:
+                db.execute("INSERT OR IGNORE INTO bot_paused_chats VALUES (?, ?)", (account, c))
+            else:
+                db.execute("DELETE FROM bot_paused_chats WHERE account_id = ? AND chat_jid = ?", (account, c))
+        msg = f"bot {'pausado' if pause else 'de volta'} no chat {label}"
     db.commit()
     return msg
 
