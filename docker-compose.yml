@@ -6,6 +6,7 @@ services:
     environment:
       BRIDGE_TOKEN: "${BRIDGE_TOKEN:-}"  # vazio = API sem autenticacao (so na rede interna do compose)
     volumes: ["store:/app/whatsapp-bridge/store"]
+    ports: ["127.0.0.1:8080:8080"]  # painel em http://localhost:8080
     restart: unless-stopped
   mcp:
     build: ./whatsapp-mcp-server

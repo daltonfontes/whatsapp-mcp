@@ -146,6 +146,26 @@ Control it from the account's own phone by sending these as normal messages. The
 | `/pausar tudo` | Pause the whole account |
 | `/voltar tudo` | Resume the whole account |
 
+### Web panel
+
+The bridge serves a panel at `http://<bridge>:8080/` (published on `127.0.0.1:8080` by `docker-compose.yml`). It needs no build step: one HTML file embedded in the Go binary. If `BRIDGE_TOKEN` is set, the page asks for it once and keeps it in the browser.
+
+From the panel you can:
+
+- Pair a new account by scanning the QR code on screen
+- Edit each account's bot settings (`enabled`, `model`, `system_prompt`, `allowed`); the bot picks changes up on its next reply
+- Browse recent chats and messages, and pause or resume the bot per chat
+- Disconnect an account
+
+Panel endpoints, all under the same token:
+
+| Method | Route |
+|--------|-------|
+| GET / PUT | `/api/accounts/{id}/bot` |
+| GET | `/api/accounts/{id}/chats?limit=50` |
+| GET | `/api/accounts/{id}/chats/{jid}/messages?limit=50` |
+| PUT / DELETE | `/api/accounts/{id}/chats/{jid}/paused` |
+
 ### Data Storage
 
 - All message history is stored in a SQLite database within the `whatsapp-bridge/store/` directory
