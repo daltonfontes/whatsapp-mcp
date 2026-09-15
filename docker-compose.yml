@@ -3,11 +3,15 @@ services:
   bridge:
     build: ./whatsapp-bridge
     image: whatsapp-bridge
+    environment:
+      BRIDGE_TOKEN: "${BRIDGE_TOKEN:-}"  # vazio = API sem autenticacao (so na rede interna do compose)
     volumes: ["store:/app/whatsapp-bridge/store"]
     restart: unless-stopped
   mcp:
     build: ./whatsapp-mcp-server
     image: whatsapp-mcp
+    environment:
+      BRIDGE_TOKEN: "${BRIDGE_TOKEN:-}"
     volumes: ["store:/app/whatsapp-bridge/store"]
     profiles: ["mcp"]
   bot:
@@ -20,6 +24,7 @@ services:
       BOT_SESSION_GAP: "6"  # horas sem msg = conversa nova, historico antigo e descartado
       TZ: "America/Sao_Paulo"
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
+      BRIDGE_TOKEN: "${BRIDGE_TOKEN:-}"
     volumes: ["store:/app/whatsapp-bridge/store"]
     depends_on: [bridge]
     restart: unless-stopped

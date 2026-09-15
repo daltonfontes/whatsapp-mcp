@@ -9,6 +9,7 @@ import audio
 
 MESSAGES_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db')
 WHATSAPP_API_BASE_URL = os.environ.get("WHATSAPP_API_BASE_URL", "http://localhost:8080/api")
+BRIDGE_HEADERS = {"Authorization": "Bearer " + os.environ["BRIDGE_TOKEN"]} if os.environ.get("BRIDGE_TOKEN") else {}
 
 @dataclass
 class Message:
@@ -140,7 +141,7 @@ def list_messages(
         
         # Build base query
         query_parts = ["SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type FROM messages"]
-        query_parts.append("JOIN chats ON messages.chat_jid = chats.jid")
+        query_parts.append("JOIN chats ON messages.chat_jid = chats.jid AND messages.account_id = chats.account_id")
         where_clauses = []
         params = []
         
@@ -237,7 +238,7 @@ def get_message_context(
         cursor.execute("""
             SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.chat_jid, messages.media_type
             FROM messages
-            JOIN chats ON messages.chat_jid = chats.jid
+            JOIN chats ON messages.chat_jid = chats.jid AND messages.account_id = chats.account_id
             WHERE messages.id = ?
         """, (message_id,))
         msg_data = cursor.fetchone()
@@ -260,7 +261,7 @@ def get_message_context(
         cursor.execute("""
             SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type
             FROM messages
-            JOIN chats ON messages.chat_jid = chats.jid
+            JOIN chats ON messages.chat_jid = chats.jid AND messages.account_id = chats.account_id
             WHERE messages.chat_jid = ? AND messages.timestamp < ?
             ORDER BY messages.timestamp DESC
             LIMIT ?
@@ -283,7 +284,7 @@ def get_message_context(
         cursor.execute("""
             SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type
             FROM messages
-            JOIN chats ON messages.chat_jid = chats.jid
+            JOIN chats ON messages.chat_jid = chats.jid AND messages.account_id = chats.account_id
             WHERE messages.chat_jid = ? AND messages.timestamp > ?
             ORDER BY messages.timestamp ASC
             LIMIT ?
@@ -342,7 +343,7 @@ def list_chats(
         
         if include_last_message:
             query_parts.append("""
-                LEFT JOIN messages ON chats.jid = messages.chat_jid 
+                LEFT JOIN messages ON chats.jid = messages.chat_jid AND chats.account_id = messages.account_id 
                 AND chats.last_message_time = messages.timestamp
             """)
             
@@ -453,7 +454,7 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
                 m.sender as last_sender,
                 m.is_from_me as last_is_from_me
             FROM chats c
-            JOIN messages m ON c.jid = m.chat_jid
+            JOIN messages m ON c.jid = m.chat_jid AND c.account_id = m.account_id
             WHERE m.sender = ? OR c.jid = ?
             ORDER BY c.last_message_time DESC
             LIMIT ? OFFSET ?
@@ -500,7 +501,7 @@ def get_last_interaction(jid: str) -> str:
                 m.id,
                 m.media_type
             FROM messages m
-            JOIN chats c ON m.chat_jid = c.jid
+            JOIN chats c ON m.chat_jid = c.jid AND m.account_id = c.account_id
             WHERE m.sender = ? OR c.jid = ?
             ORDER BY m.timestamp DESC
             LIMIT 1
@@ -551,7 +552,7 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]
         
         if include_last_message:
             query += """
-                LEFT JOIN messages m ON c.jid = m.chat_jid 
+                LEFT JOIN messages m ON c.jid = m.chat_jid AND c.account_id = m.account_id 
                 AND c.last_message_time = m.timestamp
             """
             
@@ -595,7 +596,7 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
                 m.sender as last_sender,
                 m.is_from_me as last_is_from_me
             FROM chats c
-            LEFT JOIN messages m ON c.jid = m.chat_jid 
+            LEFT JOIN messages m ON c.jid = m.chat_jid AND c.account_id = m.account_id 
                 AND c.last_message_time = m.timestamp
             WHERE c.jid LIKE ? AND c.jid NOT LIKE '%@g.us'
             LIMIT 1
@@ -622,7 +623,7 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
         if 'conn' in locals():
             conn.close()
 
-def send_message(recipient: str, message: str) -> Tuple[bool, str]:
+def send_message(recipient: str, message: str, account: str = "") -> Tuple[bool, str]:
     try:
         # Validate input
         if not recipient:
@@ -630,11 +631,12 @@ def send_message(recipient: str, message: str) -> Tuple[bool, str]:
         
         url = f"{WHATSAPP_API_BASE_URL}/send"
         payload = {
+            "account": account,
             "recipient": recipient,
             "message": message,
         }
         
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, headers=BRIDGE_HEADERS)
         
         # Check if the request was successful
         if response.status_code == 200:
@@ -650,7 +652,7 @@ def send_message(recipient: str, message: str) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
 
-def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
+def send_file(recipient: str, media_path: str, account: str = "") -> Tuple[bool, str]:
     try:
         # Validate input
         if not recipient:
@@ -664,11 +666,12 @@ def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
         
         url = f"{WHATSAPP_API_BASE_URL}/send"
         payload = {
+            "account": account,
             "recipient": recipient,
             "media_path": media_path
         }
         
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, headers=BRIDGE_HEADERS)
         
         # Check if the request was successful
         if response.status_code == 200:
@@ -684,7 +687,7 @@ def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
 
-def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
+def send_audio_message(recipient: str, media_path: str, account: str = "") -> Tuple[bool, str]:
     try:
         # Validate input
         if not recipient:
@@ -704,11 +707,12 @@ def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
         
         url = f"{WHATSAPP_API_BASE_URL}/send"
         payload = {
+            "account": account,
             "recipient": recipient,
             "media_path": media_path
         }
         
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, headers=BRIDGE_HEADERS)
         
         # Check if the request was successful
         if response.status_code == 200:
@@ -724,7 +728,7 @@ def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
 
-def download_media(message_id: str, chat_jid: str) -> Optional[str]:
+def download_media(message_id: str, chat_jid: str, account: str = "") -> Optional[str]:
     """Download media from a message and return the local file path.
     
     Args:
@@ -737,11 +741,12 @@ def download_media(message_id: str, chat_jid: str) -> Optional[str]:
     try:
         url = f"{WHATSAPP_API_BASE_URL}/download"
         payload = {
+            "account": account,
             "message_id": message_id,
             "chat_jid": chat_jid
         }
         
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, headers=BRIDGE_HEADERS)
         
         if response.status_code == 200:
             result = response.json()
