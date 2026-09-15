@@ -114,6 +114,23 @@ This application consists of two main components:
 
 2. **Python MCP Server** (`whatsapp-mcp-server/`): A Python server implementing the Model Context Protocol (MCP), which provides standardized tools for Claude to interact with WhatsApp data and send/receive messages.
 
+### Multiple accounts
+
+The bridge runs one WhatsApp session per paired phone in a single process. The account id is the phone number.
+
+| Method | Route | What it does |
+|--------|-------|--------------|
+| GET | `/api/accounts` | List paired accounts and whether each is connected |
+| POST | `/api/accounts` | Start a QR pairing, returns `{"login_id": ...}` (the QR is also printed to stdout) |
+| GET | `/api/logins/{login_id}` | Pairing state: `status` (`pending`, `success`, `timeout`), `qr` as a PNG data URL while pending, `account` on success |
+| DELETE | `/api/accounts/{id}` | Log the account out on the phone and drop it |
+| POST | `/api/send` | Body gains `"account"`; optional while exactly one account is paired |
+| POST | `/api/download` | Same `"account"` field |
+
+Set `BRIDGE_TOKEN` to require `Authorization: Bearer <token>` on every route. The Python side reads the same variable.
+
+Existing single-account databases are migrated on first start: `chats` and `messages` gain an `account_id` column and the rows are assigned to the only paired account. Downloaded media moves to `store/<account>/<chat>/`.
+
 ### Data Storage
 
 - All message history is stored in a SQLite database within the `whatsapp-bridge/store/` directory

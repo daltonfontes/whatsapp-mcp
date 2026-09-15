@@ -2,7 +2,7 @@ FROM golang:1.26 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY main.go .
+COPY *.go ./
 RUN CGO_ENABLED=1 go build -o /whatsapp-bridge .
 
 FROM debian:bookworm-slim

@@ -21,14 +21,9 @@ SESSION_GAP = float(os.environ.get("BOT_SESSION_GAP", "6")) * 3600  # horas de s
 SESSION_DB_PATH = os.path.join(os.path.dirname(MESSAGES_DB_PATH), "whatsapp.db")
 
 
-def my_number() -> str:
-    jid = sqlite3.connect(SESSION_DB_PATH, timeout=10).execute("SELECT jid FROM whatsmeow_device").fetchone()[0]
-    return jid.split(":")[0].split("@")[0]
-
-
-def wants_reply(chat: str, content: str) -> bool:
+def wants_reply(chat: str, content: str, me: str) -> bool:
     """Privado: sempre. Grupo: so quando marcam a conta (@numero aparece no texto)."""
-    return not chat.endswith("@g.us") or f"@{ME}" in content
+    return not chat.endswith("@g.us") or f"@{me}" in content
 
 
 def phone_of(sender: str) -> str:
@@ -39,7 +34,7 @@ def phone_of(sender: str) -> str:
     return row[0] if row else sender
 
 
-def history(db, chat: str, limit: int = 10):
+def history(db, account: str, chat: str, limit: int = 10):
     """Ultimas mensagens do chat no formato do chat completions (mais antiga primeiro).
 
     Corta no primeiro silencio maior que SESSION_GAP: assunto de outro dia nao entra no contexto.
@@ -47,8 +42,8 @@ def history(db, chat: str, limit: int = 10):
     """
     rows = db.execute(
         "SELECT is_from_me, content, CAST(strftime('%s', timestamp) AS INTEGER) FROM messages "
-        "WHERE chat_jid = ? AND content != '' ORDER BY timestamp DESC LIMIT ?",
-        (chat, limit),
+        "WHERE account_id = ? AND chat_jid = ? AND content != '' ORDER BY timestamp DESC LIMIT ?",
+        (account, chat, limit),
     ).fetchall()
     session = []
     for i, (me, c, ts) in enumerate(rows):  # do mais novo para o mais antigo
@@ -76,7 +71,7 @@ def reply(messages) -> str:
 
 def new_messages(db, after_rowid):
     return db.execute(
-        "SELECT rowid, chat_jid, sender, content, strftime('%s', timestamp) FROM messages "
+        "SELECT rowid, account_id, chat_jid, sender, content, strftime('%s', timestamp) FROM messages "
         "WHERE rowid > ? AND is_from_me = 0 AND content != '' ORDER BY rowid",
         (after_rowid,),
     ).fetchall()
@@ -86,30 +81,28 @@ def main():
     db = sqlite3.connect(MESSAGES_DB_PATH, timeout=10)
     last = db.execute("SELECT COALESCE(MAX(rowid), 0) FROM messages").fetchone()[0]
     start = time.time()
-    global ME
-    ME = my_number()
-    print(f"bot: escutando a partir de rowid {last}, allowed={ALLOWED or 'todos'}, eu={ME}", flush=True)
-    pending = {}  # chat -> (hora da ultima msg recebida, textos acumulados)
+    print(f"bot: escutando a partir de rowid {last}, allowed={ALLOWED or 'todos'}", flush=True)
+    pending = {}  # (conta, chat) -> (hora da ultima msg recebida, textos acumulados)
     while True:
-        for rowid, chat, sender, content, ts in new_messages(db, last):
+        for rowid, account, chat, sender, content, ts in new_messages(db, last):
             last = rowid
-            if int(ts) < start or (ALLOWED and phone_of(sender) not in ALLOWED) or not wants_reply(chat, content):
+            if int(ts) < start or (ALLOWED and phone_of(sender) not in ALLOWED) or not wants_reply(chat, content, account):
                 continue  # historico antigo, remetente nao permitido, ou grupo sem mencao
-            pending.setdefault(chat, [0, []])
-            pending[chat][0] = time.time()
-            pending[chat][1].append(content)
+            pending.setdefault((account, chat), [0, []])
+            pending[(account, chat)][0] = time.time()
+            pending[(account, chat)][1].append(content)
         # so responde quando o chat fica DEBOUNCE segundos sem msg nova: junta "oi" / "tudo bem?" / "..."
-        for chat, (t, texts) in list(pending.items()):
+        for (account, chat), (t, texts) in list(pending.items()):
             if time.time() - t < DEBOUNCE:
                 continue
-            del pending[chat]
+            del pending[(account, chat)]
             try:
-                answer = reply(history(db, chat))  # historico ja contem todas as msgs acumuladas
+                answer = reply(history(db, account, chat))  # historico ja contem todas as msgs acumuladas
             except Exception as e:  # modelo free fora do ar / rate limit: pula, nao derruba o bot
-                print(f"{chat} <- {texts!r} -> erro no modelo: {e}", flush=True)
+                print(f"[{account}] {chat} <- {texts!r} -> erro no modelo: {e}", flush=True)
                 continue
-            ok, msg = send_message(chat, PREFIX + answer)
-            print(f"{chat} <- {texts!r} -> {answer!r} ({ok} {msg})", flush=True)
+            ok, msg = send_message(chat, PREFIX + answer, account)
+            print(f"[{account}] {chat} <- {texts!r} -> {answer!r} ({ok} {msg})", flush=True)
         time.sleep(1)
 
 
