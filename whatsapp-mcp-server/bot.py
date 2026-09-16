@@ -4,6 +4,10 @@ Faz polling no messages.db (gravado pelo bridge) e responde via REST /api/send.
 Config por conta na tabela bot_accounts (criada aqui). Conta nova nasce com os defaults do env:
 BOT_MODEL, BOT_SYSTEM_PROMPT e BOT_ALLOWED (numeros separados por virgula, vazio = responde todo mundo).
 
+Agentes (tabela bot_agents, editada pelo painel): cada um tem nome, descricao, prompt e modelo opcional.
+Com agentes cadastrados, uma chamada extra ao modelo escolhe pelo nome qual responde; o prompt do agente
+entra depois do prompt da conta (que segue valendo como base). Nenhum bate = so o prompt da conta.
+
 Comandos: mensagens enviadas do celular da propria conta. A confirmacao chega no seu chat com voce mesmo.
   /pausar             para de responder no chat onde foi enviado
   /voltar             volta a responder nesse chat
@@ -43,6 +47,14 @@ CREATE TABLE IF NOT EXISTS bot_paused_chats (
     account_id TEXT,
     chat_jid TEXT,
     PRIMARY KEY (account_id, chat_jid)
+);
+CREATE TABLE IF NOT EXISTS bot_agents (
+    account_id TEXT,
+    name TEXT,
+    description TEXT NOT NULL DEFAULT '',
+    system_prompt TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (account_id, name)
 );
 """
 
@@ -143,19 +155,54 @@ def history(db, account: str, chat: str, limit: int = 10):
     return session
 
 
-def reply(cfg: dict, messages) -> str:
-    if not OPENROUTER_KEY:
-        return "Recebi: " + messages[-1]["content"]
-    if cfg["system_prompt"]:
-        messages = [{"role": "system", "content": cfg["system_prompt"]}] + messages
+def agents(db, account: str) -> list[dict]:
+    return [
+        dict(zip(("name", "description", "system_prompt", "model"), row))
+        for row in db.execute(
+            "SELECT name, description, system_prompt, model FROM bot_agents WHERE account_id = ? ORDER BY rowid", (account,)
+        )
+    ]
+
+
+def chat(model: str, messages) -> str:
     r = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={"Authorization": f"Bearer {OPENROUTER_KEY}"},
-        json={"model": cfg["model"], "messages": messages},
+        json={"model": model, "messages": messages},
         timeout=60,
     )
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"].strip()
+
+
+def route(cfg: dict, agents: list[dict], messages) -> dict | None:
+    """Escolhe o agente lendo as descricoes; None se nenhum serve ou se o roteador falhar.
+
+    ponytail: roteia a cada resposta (uma chamada extra). Se o agente ficar trocando no meio da
+    conversa ou o rate limit do modelo free apertar, guardar o agente escolhido por chat.
+    """
+    if not agents:
+        return None
+    menu = "\n".join(f"- {a['name']}: {a['description']}" for a in agents)
+    ask = [{"role": "system", "content": f"Escolha qual agente deve responder a conversa.\nAgentes:\n{menu}\n\n"
+            "Responda somente com o nome do agente, ou 'nenhum'."}] + messages[-4:]
+    try:
+        choice = chat(cfg["model"], ask).lower()
+    except Exception as e:
+        print(f"roteador falhou, usando o prompt da conta: {e}", flush=True)
+        return None
+    return next((a for a in agents if a["name"].lower() in choice), None)
+
+
+def reply(cfg: dict, agents: list[dict], messages) -> tuple[str, str]:
+    """Devolve (resposta, nome do agente que respondeu ou '')."""
+    if not OPENROUTER_KEY:
+        return "Recebi: " + messages[-1]["content"], ""
+    agent = route(cfg, agents, messages) or {"name": "", "system_prompt": "", "model": ""}
+    prompt = "\n\n".join(filter(None, (cfg["system_prompt"], agent["system_prompt"])))
+    if prompt:
+        messages = [{"role": "system", "content": prompt}] + messages
+    return chat(agent["model"] or cfg["model"], messages), agent["name"]
 
 
 def new_messages(db, after_rowid):
@@ -199,12 +246,12 @@ def main():
                 print(f"[{account}] {chat} <- {texts!r} -> pausado", flush=True)
                 continue
             try:
-                answer = reply(cfg, history(db, account, chat))  # historico ja contem todas as msgs acumuladas
+                answer, who = reply(cfg, agents(db, account), history(db, account, chat))  # historico ja tem as msgs acumuladas
             except Exception as e:  # modelo free fora do ar / rate limit: pula, nao derruba o bot
                 print(f"[{account}] {chat} <- {texts!r} -> erro no modelo: {e}", flush=True)
                 continue
             ok, msg = send_message(chat, PREFIX + answer, account)
-            print(f"[{account}] {chat} <- {texts!r} -> {answer!r} ({ok} {msg})", flush=True)
+            print(f"[{account}] {chat} <- {texts!r} -> [{who or 'conta'}] {answer!r} ({ok} {msg})", flush=True)
         time.sleep(1)
 
 

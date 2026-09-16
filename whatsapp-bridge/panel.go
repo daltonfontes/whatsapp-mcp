@@ -82,6 +82,51 @@ func (store *MessageStore) SetBotConfig(account string, c BotConfig) error {
 	return err
 }
 
+// Agent is one specialised persona of an account; bot.py picks one per reply from the descriptions.
+type Agent struct {
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	SystemPrompt string `json:"system_prompt"`
+	Model        string `json:"model"` // empty = the account's model
+}
+
+func (store *MessageStore) ListAgents(account string) ([]Agent, error) {
+	rows, err := store.db.Query(
+		"SELECT name, description, system_prompt, model FROM bot_agents WHERE account_id = ? ORDER BY rowid", account)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Agent{}
+	for rows.Next() {
+		var a Agent
+		if err := rows.Scan(&a.Name, &a.Description, &a.SystemPrompt, &a.Model); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// SetAgents replaces the account's whole list, in the given order.
+func (store *MessageStore) SetAgents(account string, agents []Agent) error {
+	tx, err := store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM bot_agents WHERE account_id = ?", account); err != nil {
+		return err
+	}
+	for _, a := range agents {
+		if _, err := tx.Exec("INSERT INTO bot_agents (account_id, name, description, system_prompt, model) VALUES (?, ?, ?, ?, ?)",
+			account, a.Name, a.Description, a.SystemPrompt, a.Model); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (store *MessageStore) SetPaused(account, chatJID string, paused bool) error {
 	q := "DELETE FROM bot_paused_chats WHERE account_id = ? AND chat_jid = ?"
 	if paused {
@@ -249,6 +294,34 @@ func registerPanel(mux *http.ServeMux, bridge *Bridge) {
 		}
 		c.Exists = true
 		writeJSON(w, http.StatusOK, c)
+	})
+
+	mux.HandleFunc("GET /api/accounts/{id}/agents", func(w http.ResponseWriter, r *http.Request) {
+		list, err := store.ListAgents(r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	})
+
+	mux.HandleFunc("PUT /api/accounts/{id}/agents", func(w http.ResponseWriter, r *http.Request) {
+		var list []Agent
+		if err := json.NewDecoder(r.Body).Decode(&list); err != nil {
+			http.Error(w, "list of {name, description, system_prompt, model} expected", http.StatusBadRequest)
+			return
+		}
+		for _, a := range list {
+			if a.Name == "" {
+				http.Error(w, "every agent needs a name", http.StatusBadRequest)
+				return
+			}
+		}
+		if err := store.SetAgents(r.PathValue("id"), list); err != nil {
+			fail(w, err) // duplicate names hit the primary key here
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
 	})
 
 	mux.HandleFunc("GET /api/accounts/{id}/chats", func(w http.ResponseWriter, r *http.Request) {

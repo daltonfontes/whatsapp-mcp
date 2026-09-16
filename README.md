@@ -154,6 +154,7 @@ From the panel you can:
 
 - Pair a new account by scanning the QR code on screen
 - Edit each account's bot settings (`enabled`, `model`, `system_prompt`, `allowed`); the bot picks changes up on its next reply. The model field offers the free OpenRouter models in a dropdown and still accepts any id or preset typed by hand
+- Add agents to an account (`bot_agents`: name, description, own prompt, optional model). When an account has agents, the bot makes one extra call to pick the agent whose description fits the conversation, then answers with the account prompt followed by that agent's prompt. No match, or no agents, means the account prompt alone
 - Browse recent chats and messages with filters (all, bot, human, groups) and search by name, number or note
 - Reply as a human from the chat: sending from the panel takes the conversation over from the bot; "Devolver ao bot" hands it back
 - Keep a contact card per chat (name and notes) that shows in the list
@@ -165,6 +166,7 @@ Panel endpoints, all under the same token:
 |--------|-------|
 | GET | `/api/models` (OpenRouter models with zero price, cached for an hour) |
 | GET / PUT | `/api/accounts/{id}/bot` |
+| GET / PUT | `/api/accounts/{id}/agents` (PUT replaces the whole list) |
 | GET | `/api/accounts/{id}/chats?limit=50` |
 | GET | `/api/accounts/{id}/chats/{jid}/messages?limit=50` |
 | PUT / DELETE | `/api/accounts/{id}/chats/{jid}/paused` |
