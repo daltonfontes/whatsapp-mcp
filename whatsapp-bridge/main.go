@@ -212,8 +212,9 @@ type SendMessageRequest struct {
 	MediaPath string `json:"media_path,omitempty"`
 }
 
-// Function to send a WhatsApp message
-func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message string, mediaPath string) (bool, string) {
+// Function to send a WhatsApp message. Sent messages are also stored, because whatsmeow does
+// not echo our own sends as events and the bot needs its previous replies in the history.
+func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, recipient string, message string, mediaPath string) (bool, string) {
 	if !client.IsConnected() {
 		return false, "Not connected to WhatsApp"
 	}
@@ -240,6 +241,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 	}
 
 	msg := &waProto.Message{}
+	mediaKind := "" // image | audio | video | document, as stored in messages.media_type
 
 	// Check if we have media to send
 	if mediaPath != "" {
@@ -306,6 +308,9 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 		}
 
 		fmt.Println("Media uploaded", resp)
+
+		mediaKind = map[whatsmeow.MediaType]string{whatsmeow.MediaImage: "image", whatsmeow.MediaAudio: "audio",
+			whatsmeow.MediaVideo: "video", whatsmeow.MediaDocument: "document"}[mediaType]
 
 		// Create the appropriate message type based on media type
 		switch mediaType {
@@ -379,10 +384,22 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 	}
 
 	// Send message
-	_, err = client.SendMessage(context.Background(), recipientJID, msg)
+	resp, err := client.SendMessage(context.Background(), recipientJID, msg)
 
 	if err != nil {
 		return false, fmt.Sprintf("Error sending message: %v", err)
+	}
+
+	if messageStore != nil {
+		account, chatJID := accountOf(client), recipientJID.String()
+		name := GetChatName(client, messageStore, recipientJID, chatJID, nil, "", client.Log)
+		if err := messageStore.StoreChat(account, chatJID, name, resp.Timestamp); err == nil {
+			err = messageStore.StoreMessage(account, resp.ID, chatJID, account, message, resp.Timestamp, true,
+				mediaKind, filepath.Base(mediaPath), "", nil, nil, nil, 0)
+		}
+		if err != nil {
+			client.Log.Warnf("Failed to store sent message: %v", err)
+		}
 	}
 
 	return true, fmt.Sprintf("Message sent to %s", recipient)
@@ -735,7 +752,7 @@ func startRESTServer(bridge *Bridge, port int) {
 			return
 		}
 
-		success, message := sendWhatsAppMessage(client, req.Recipient, req.Message, req.MediaPath)
+		success, message := sendWhatsAppMessage(client, bridge.store, req.Recipient, req.Message, req.MediaPath)
 		fmt.Printf("[%s] send to %s: %v %s\n", accountOf(client), req.Recipient, success, message)
 		status := http.StatusOK
 		if !success {
