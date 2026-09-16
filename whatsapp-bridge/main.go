@@ -76,6 +76,15 @@ const schemaSQL = `
 		chat_jid TEXT,
 		PRIMARY KEY (account_id, chat_jid)
 	);
+
+	-- Panel-only: operator-given name and notes per chat.
+	CREATE TABLE IF NOT EXISTS contacts (
+		account_id TEXT,
+		jid TEXT,
+		name TEXT NOT NULL DEFAULT '',
+		notes TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (account_id, jid)
+	);
 `
 
 // Initialize message store

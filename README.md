@@ -154,7 +154,9 @@ From the panel you can:
 
 - Pair a new account by scanning the QR code on screen
 - Edit each account's bot settings (`enabled`, `model`, `system_prompt`, `allowed`); the bot picks changes up on its next reply. The model field offers the free OpenRouter models in a dropdown and still accepts any id or preset typed by hand
-- Browse recent chats and messages, and pause or resume the bot per chat
+- Browse recent chats and messages with filters (all, bot, human, groups) and search by name, number or note
+- Reply as a human from the chat: sending from the panel takes the conversation over from the bot; "Devolver ao bot" hands it back
+- Keep a contact card per chat (name and notes) that shows in the list
 - Disconnect an account
 
 Panel endpoints, all under the same token:
@@ -166,6 +168,7 @@ Panel endpoints, all under the same token:
 | GET | `/api/accounts/{id}/chats?limit=50` |
 | GET | `/api/accounts/{id}/chats/{jid}/messages?limit=50` |
 | PUT / DELETE | `/api/accounts/{id}/chats/{jid}/paused` |
+| PUT | `/api/accounts/{id}/chats/{jid}/contact` (name, notes) |
 
 ### Data Storage
 

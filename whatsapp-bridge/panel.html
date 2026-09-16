@@ -69,6 +69,19 @@
   .search input:focus { border-color: var(--accent); }
   .search svg { position: absolute; left: 11px; top: 10px; width: 17px; height: 17px; color: var(--muted); }
 
+  /* ---- filters ---- */
+  .chips { display: flex; gap: 6px; padding: 0 12px 8px; flex-wrap: wrap; }
+  .chip { border: 1px solid var(--line); background: var(--panel); color: var(--muted); padding: 4px 11px; border-radius: 999px; font-size: 12.5px; }
+  .chip.active { background: var(--accent-2); color: var(--accent-text); border-color: transparent; font-weight: 600; }
+
+  /* ---- composer & contact card ---- */
+  .composer { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--panel); align-items: flex-end; }
+  .composer textarea { flex: 1; min-height: 40px; max-height: 140px; padding: 9px 12px; border-radius: 20px; resize: none; line-height: 1.4; }
+  .composer .btn.primary { height: 40px; border-radius: 20px; padding: 0 16px; }
+  .contact { padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel); display: grid; gap: 8px; grid-template-columns: 1fr 2fr auto; align-items: start; }
+  .contact textarea { min-height: 40px; height: 40px; }
+  @media (max-width: 720px) { .contact { grid-template-columns: 1fr; } }
+
   /* ---- lists ---- */
   .list { list-style: none; margin: 0; padding: 6px; }
   .list li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; cursor: pointer; }
@@ -170,7 +183,13 @@
         <h2 id="chatsTitle">Conversas</h2>
         <span id="chatsCount" class="pill"></span>
       </div>
-      <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="search" placeholder="Buscar conversa" autocomplete="off"></div>
+      <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="search" placeholder="Buscar por nome, número ou nota" autocomplete="off"></div>
+      <div class="chips" id="chips">
+        <button class="chip active" data-f="all">Todas</button>
+        <button class="chip" data-f="bot">Bot</button>
+        <button class="chip" data-f="human">Humano</button>
+        <button class="chip" data-f="group">Grupos</button>
+      </div>
       <div class="col-body"><ul class="list" id="chats"></ul></div>
     </section>
 
@@ -222,11 +241,21 @@
         <div class="col-head">
           <button class="btn icon back" data-back="chats" aria-label="Voltar">‹</button>
           <div class="avatar sm" id="chatAvatar"></div>
-          <h2 id="chatTitle"></h2>
+          <div class="grow" style="min-width:0"><h2 id="chatTitle"></h2><div id="chatSub" class="muted small"></div></div>
+          <button class="btn icon" id="toggleContact" title="Ficha do contato">ℹ︎</button>
           <button class="btn sm" id="togglePause"></button>
         </div>
-        <div class="paused-bar" id="pausedBar" hidden><span>⏸ O bot está pausado nesta conversa. Você está no controle.</span></div>
+        <form class="contact" id="contact" hidden>
+          <input type="text" name="name" placeholder="Nome do contato">
+          <textarea name="notes" placeholder="Anotações: o que a pessoa quer, combinados, próximos passos…"></textarea>
+          <button type="submit" class="btn">Salvar ficha</button>
+        </form>
+        <div class="paused-bar" id="pausedBar" hidden><span>👤 Atendimento humano: o bot não responde aqui até você devolver.</span></div>
         <div class="msgs" id="msgs"></div>
+        <form class="composer" id="composer">
+          <textarea id="draft" rows="1" placeholder="Escreva uma mensagem (Enter envia, Shift+Enter quebra linha)"></textarea>
+          <button type="submit" class="btn primary">Enviar</button>
+        </form>
       </div>
     </section>
   </div>
@@ -278,13 +307,17 @@ document.querySelectorAll('.back').forEach(b => b.onclick = () => { view(b.datas
 
 // ---------- labels ----------
 const isGroup = c => c.jid.endsWith('@g.us');
+const waName = c => { const id = c.jid.split('@')[0]; return c.name && c.name !== id ? c.name.trim() : ''; };
 const chatLabel = c => {
   const id = c.jid.split('@')[0];
-  const name = c.name && c.name !== id ? c.name.trim() : '';
-  if (isGroup(c)) return name || 'Grupo ' + id;
-  return name || fmtPhone(c.phone) || id;
+  if (c.contact_name) return c.contact_name;
+  if (isGroup(c)) return waName(c) || 'Grupo ' + id;
+  return waName(c) || fmtPhone(c.phone) || id;
 };
-const chatSub = c => !isGroup(c) && c.name && c.name !== c.jid.split('@')[0] && c.phone ? fmtPhone(c.phone) : '';
+// second line under the name: the phone when the name is not the phone, or the WhatsApp name when renamed
+const chatSub = c => isGroup(c) ? '' : [fmtPhone(c.phone), c.contact_name && waName(c) ? waName(c) : ''].filter(s => s && s !== chatLabel(c)).join(' · ');
+let filter = 'all';
+const matchesFilter = c => filter === 'all' || (filter === 'group' ? isGroup(c) : filter === 'human' ? c.paused : !c.paused && !isGroup(c));
 const initials = c => isGroup(c) ? '👥' : (chatLabel(c).match(/[A-Za-zÀ-ÿ]/g) ? chatLabel(c).split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() : chatLabel(c).slice(-2));
 const hue = s => { let h = 0; for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
 const avatar = (c, cls = '') => `<div class="avatar ${cls} ${isGroup(c) ? 'group' : ''}" style="${isGroup(c) ? '' : `background:hsl(${hue(c.jid)} 45% 45%)`}">${esc(initials(c))}</div>`;
@@ -325,19 +358,21 @@ async function loadChats() {
 }
 function renderChats() {
   const q = $('#search').value.trim().toLowerCase();
-  const list = chatsCache.filter(c => !q || chatLabel(c).toLowerCase().includes(q) || (c.phone || '').includes(q));
-  $('#chatsCount').textContent = chatsCache.length || '';
+  const list = chatsCache.filter(c => matchesFilter(c) && (!q || [chatLabel(c), waName(c), c.phone, c.notes].join(' ').toLowerCase().includes(q)));
+  $('#chatsCount').textContent = list.length || '';
   $('#chats').innerHTML = list.map(c => `
     <li data-jid="${esc(c.jid)}" class="${c.jid === currentChat ? 'active' : ''}">
       ${avatar(c)}
       <div class="grow">
-        <div class="title">${esc(chatLabel(c))}</div>
-        <div class="sub">${esc(c.last_message || chatSub(c) || '')}</div>
+        <div class="title">${esc(chatLabel(c))}${c.notes ? ' <span class="muted" title="' + esc(c.notes) + '">📝</span>' : ''}</div>
+        <div class="sub">${c.last_message ? (c.last_from_me ? 'Você: ' : '') + esc(c.last_message) : esc(chatSub(c))}</div>
       </div>
-      <div class="meta"><span>${c.last_message_time ? fmtWhen(c.last_message_time) : ''}</span>${c.paused ? '<span class="pill paused">pausado</span>' : ''}</div>
-    </li>`).join('') || `<li class="muted" style="cursor:default">${q ? 'Nada encontrado.' : 'Sem conversas ainda.'}</li>`;
+      <div class="meta"><span>${c.last_message_time ? fmtWhen(c.last_message_time) : ''}</span>${c.paused ? '<span class="pill paused">humano</span>' : ''}</div>
+    </li>`).join('') || `<li class="muted" style="cursor:default">${q || filter !== 'all' ? 'Nada aqui.' : 'Sem conversas ainda.'}</li>`;
 }
 $('#search').oninput = renderChats;
+$('#chips').onclick = e => { const b = e.target.closest('.chip'); if (!b) return; filter = b.dataset.f;
+  document.querySelectorAll('.chip').forEach(x => x.classList.toggle('active', x === b)); renderChats(); };
 
 function showDetail(which) {
   $('#emptyDetail').hidden = which !== 'empty';
@@ -351,9 +386,11 @@ async function openChat(jid, quiet = false) {
   currentChat = jid;
   document.querySelectorAll('#chats li').forEach(li => li.classList.toggle('active', li.dataset.jid === jid));
   $('#chatTitle').textContent = chatLabel(c);
+  $('#chatSub').textContent = chatSub(c);
   $('#chatAvatar').outerHTML = avatar(c, 'sm').replace('class="avatar', 'id="chatAvatar" class="avatar');
-  $('#togglePause').textContent = c.paused ? '▶ Voltar a responder' : '⏸ Pausar aqui';
+  $('#togglePause').textContent = c.paused ? '🤖 Devolver ao bot' : '👤 Assumir conversa';
   $('#pausedBar').hidden = !c.paused;
+  if (!quiet) { const f = $('#contact'); f.name.value = c.contact_name; f.notes.value = c.notes; f.hidden = !c.notes; }
   const msgs = (await api('GET', `/api/accounts/${encodeURIComponent(current)}/chats/${encodeURIComponent(jid)}/messages?limit=80`)).reverse();
   let day = '', html = '';
   for (const m of msgs) {
@@ -378,8 +415,38 @@ $('#chats').onclick = e => { const li = e.target.closest('li[data-jid]'); if (li
 $('#togglePause').onclick = async () => {
   const c = chatsCache.find(x => x.jid === currentChat);
   await api(c && c.paused ? 'DELETE' : 'PUT', `/api/accounts/${encodeURIComponent(current)}/chats/${encodeURIComponent(currentChat)}/paused`);
-  toast(c && c.paused ? 'Bot de volta nesta conversa' : 'Bot pausado nesta conversa');
+  toast(c && c.paused ? 'Bot de volta nesta conversa' : 'Conversa assumida, o bot fica em silêncio aqui');
   await loadChats(); openChat(currentChat, true);
+};
+
+// ---------- human reply from the panel: sends and takes the chat over from the bot ----------
+$('#composer').onsubmit = async e => {
+  e.preventDefault();
+  const text = $('#draft').value.trim();
+  if (!text || !currentChat) return;
+  const btn = e.target.querySelector('button'); btn.disabled = true;
+  try {
+    const c = chatsCache.find(x => x.jid === currentChat);
+    if (c && !c.paused) await api('PUT', `/api/accounts/${encodeURIComponent(current)}/chats/${encodeURIComponent(currentChat)}/paused`);
+    const r = await api('POST', '/api/send', { account: current, recipient: currentChat, message: text });
+    if (!r.success) throw new Error(r.message);
+    $('#draft').value = ''; $('#draft').style.height = '';
+    await loadChats(); openChat(currentChat, true);
+  } catch (err) { toast('Não enviou: ' + err.message, true); }
+  btn.disabled = false; $('#draft').focus();
+};
+$('#draft').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#composer').requestSubmit(); } };
+$('#draft').oninput = e => { e.target.style.height = ''; e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px'; };
+
+$('#toggleContact').onclick = () => { const f = $('#contact'); f.hidden = !f.hidden; if (!f.hidden) f.name.focus(); };
+$('#contact').onsubmit = async e => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api('PUT', `/api/accounts/${encodeURIComponent(current)}/chats/${encodeURIComponent(currentChat)}/contact`, { name: f.name.value.trim(), notes: f.notes.value.trim() });
+    toast('Ficha salva');
+    await loadChats(); openChat(currentChat, true);
+  } catch (err) { toast('Erro: ' + err.message, true); }
 };
 
 // ---------- settings ----------
