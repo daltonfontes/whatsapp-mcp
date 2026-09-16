@@ -33,6 +33,7 @@ DEFAULTS = {  # usados so na primeira vez que uma conta aparece; depois vale a t
 PREFIX = "🤖 [Automação] "
 DEBOUNCE = float(os.environ.get("BOT_DEBOUNCE", "5"))  # segundos de silencio antes de responder
 SESSION_GAP = float(os.environ.get("BOT_SESSION_GAP", "6")) * 3600  # horas de silencio = conversa nova
+CATCHUP = float(os.environ.get("BOT_CATCHUP", "10")) * 60  # minutos: ao subir, responde o que chegou sem resposta nesse periodo
 SESSION_DB_PATH = os.path.join(os.path.dirname(MESSAGES_DB_PATH), "whatsapp.db")
 
 SCHEMA = """
@@ -213,11 +214,29 @@ def new_messages(db, after_rowid):
     ).fetchall()
 
 
+def resume_from(db, since: float) -> int:
+    """Rowid a partir do qual reprocessar: tudo com timestamp >= since. Sem nada tao novo, so o que chegar daqui em diante."""
+    return db.execute(
+        "SELECT COALESCE((SELECT MIN(rowid) FROM messages WHERE CAST(strftime('%s', timestamp) AS INTEGER) >= ?) - 1, "
+        "(SELECT MAX(rowid) FROM messages), 0)",
+        (since,),
+    ).fetchone()[0]
+
+
+def answered(db, account: str, chat: str) -> bool:
+    """Ultima mensagem do chat e nossa: ja foi respondida, ou o dono respondeu pelo celular."""
+    row = db.execute(
+        "SELECT is_from_me FROM messages WHERE account_id = ? AND chat_jid = ? AND content != '' ORDER BY timestamp DESC LIMIT 1",
+        (account, chat),
+    ).fetchone()
+    return bool(row and row[0])
+
+
 def main():
     db = sqlite3.connect(MESSAGES_DB_PATH, timeout=10)
     db.executescript(SCHEMA)
-    last = db.execute("SELECT COALESCE(MAX(rowid), 0) FROM messages").fetchone()[0]
-    start = time.time()
+    start = time.time() - CATCHUP  # mensagem que chegou enquanto o bot estava fora (restart, deploy) ainda e respondida
+    last = resume_from(db, start)
     print(f"bot: escutando a partir de rowid {last}", flush=True)
     pending = {}  # (conta, chat) -> (hora da ultima msg recebida, textos acumulados)
     while True:
@@ -244,6 +263,9 @@ def main():
             cfg = config(db, account)  # checado na hora de responder: /pausar durante o debounce ja vale
             if not cfg["enabled"] or is_paused(db, account, chat):
                 print(f"[{account}] {chat} <- {texts!r} -> pausado", flush=True)
+                continue
+            if answered(db, account, chat):  # respondida antes do restart, ou o dono respondeu pelo celular durante o debounce
+                print(f"[{account}] {chat} <- {texts!r} -> ja respondida", flush=True)
                 continue
             try:
                 answer, who = reply(cfg, agents(db, account), history(db, account, chat))  # historico ja tem as msgs acumuladas

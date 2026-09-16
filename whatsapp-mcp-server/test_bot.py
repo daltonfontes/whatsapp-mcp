@@ -53,7 +53,27 @@ def test_route():
     assert bot.reply(cfg, [],[{"role": "user", "content": "oi"}]) == ("ok", "") and calls == ["x/base"]  # sem agentes = 1 chamada
 
 
+def test_restart_catchup():
+    db = sqlite3.connect(":memory:")
+    db.executescript("CREATE TABLE messages (account_id, chat_jid, content, timestamp, is_from_me);")
+    a, c = "5511", "5522@s.whatsapp.net"
+    assert bot.resume_from(db, 0) == 0  # banco vazio
+    db.executemany("INSERT INTO messages VALUES (?, ?, ?, ?, ?)", [
+        (a, c, "ontem", "2024-01-01 10:00:00", 0),
+        (a, c, "resposta", "2024-01-01 10:01:00", 1),
+        (a, c, "chegou no restart", "2024-01-02 10:00:00", 0),
+    ])
+    cutoff = 1704189600  # 2024-01-02 10:00:00 UTC
+    assert bot.resume_from(db, cutoff) == 2  # reprocessa so a que chegou no restart
+    assert bot.resume_from(db, cutoff + 1) == 3  # nada tao novo: so daqui em diante
+    assert not bot.answered(db, a, c)
+    db.execute("INSERT INTO messages VALUES (?, ?, 'resp', '2024-01-02 10:00:30', 1)", (a, c))
+    assert bot.answered(db, a, c)  # ultima e nossa: nao responde de novo
+    assert not bot.answered(db, a, "outro@s.whatsapp.net")
+
+
 if __name__ == "__main__":
     test_commands()
     test_route()
+    test_restart_catchup()
     print("ok")

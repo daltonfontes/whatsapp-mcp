@@ -24,6 +24,7 @@ services:
       BOT_MODEL: "@preset/whatsapp-responde"  # defaults so para conta nova; depois vale a tabela bot_accounts
       BOT_SYSTEM_PROMPT: ""
       BOT_SESSION_GAP: "6"  # horas sem msg = conversa nova, historico antigo e descartado
+      BOT_CATCHUP: "10"  # minutos: ao subir, responde o que chegou sem resposta nesse periodo (restart, deploy)
       TZ: "America/Sao_Paulo"
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
       BRIDGE_TOKEN: "${BRIDGE_TOKEN:-}"
