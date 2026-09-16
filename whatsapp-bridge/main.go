@@ -76,6 +76,15 @@ const schemaSQL = `
 		chat_jid TEXT,
 		PRIMARY KEY (account_id, chat_jid)
 	);
+	-- Specialised agents of an account; the bot routes each reply to one of them (or none).
+	CREATE TABLE IF NOT EXISTS bot_agents (
+		account_id TEXT,
+		name TEXT,
+		description TEXT NOT NULL DEFAULT '',
+		system_prompt TEXT NOT NULL DEFAULT '',
+		model TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (account_id, name)
+	);
 
 	-- Panel-only: operator-given name and notes per chat.
 	CREATE TABLE IF NOT EXISTS contacts (

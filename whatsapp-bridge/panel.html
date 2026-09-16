@@ -232,6 +232,13 @@
                 <div class="hint">Vazio responde para todo mundo. Em grupos o bot só fala quando é mencionado.</div>
               </div>
             </div>
+            <div class="card">
+              <h3>Agentes</h3>
+              <p class="desc">Opcional. Com agentes, o bot lê a conversa, escolhe pela descrição qual deles responde e soma o prompt dele ao prompt da conta. Se nenhum servir, responde só com o prompt da conta.</p>
+              <div id="agents"></div>
+              <button type="button" class="btn" id="addAgent">+ Agente</button>
+              <datalist id="modelList"></datalist>
+            </div>
             <div class="row"><button type="submit" class="btn primary">Salvar</button><span id="cfgMsg" class="muted small"></span></div>
           </form>
         </div>
@@ -456,6 +463,8 @@ async function openSettings() {
   const f = $('#cfg');
   f.enabled.checked = c.enabled; f.model.value = c.model; f.system_prompt.value = c.system_prompt; f.allowed.value = c.allowed;
   syncModelSel(c.model);
+  const agents = await api('GET', `/api/accounts/${encodeURIComponent(current)}/agents`);
+  $('#agents').innerHTML = agents.map(agentRow).join('');
   $('#cfgHint').hidden = c.exists;
   $('#settingsTitle').textContent = 'Bot · ' + fmtPhone(current);
   currentChat = null; stopChatRefresh(); renderChats();
@@ -467,6 +476,7 @@ $('#cfg').onsubmit = async e => {
   try {
     await api('PUT', `/api/accounts/${encodeURIComponent(current)}/bot`,
       { enabled: f.enabled.checked, model: f.model.value.trim(), system_prompt: f.system_prompt.value, allowed: f.allowed.value.replace(/\s/g, '') });
+    await api('PUT', `/api/accounts/${encodeURIComponent(current)}/agents`, readAgents());
     $('#cfgHint').hidden = true;
     toast('Salvo. O bot já usa a nova configuração.');
   } catch (err) { toast('Erro ao salvar: ' + err.message, true); }
@@ -483,12 +493,29 @@ async function loadModels() {
   const models = await api('GET', '/api/models');
   const ctx = n => n >= 1000 ? Math.round(n / 1000) + 'k' : n;
   $('#modelSel').insertAdjacentHTML('beforeend', models.map(m => `<option value="${esc(m.id)}">${esc(m.name)} · ${ctx(m.context_length)} ctx</option>`).join(''));
+  $('#modelList').innerHTML = models.map(m => `<option value="${esc(m.id)}">`).join('');
   syncModelSel($('#model').value);
 }
 // Select mirrors the text field; a value outside the free list falls back to the placeholder option.
 function syncModelSel(v) { const s = $('#modelSel'); s.value = v; if (s.selectedIndex < 0) s.selectedIndex = 0; }
 $('#modelSel').onchange = e => { if (e.target.value) $('#model').value = e.target.value; };
 $('#model').oninput = e => syncModelSel(e.target.value);
+
+// ---------- agents: rows inside the settings form, saved as a whole list ----------
+const agentRow = (a = {}) => `
+  <div class="agent field" style="border:1px solid var(--line);border-radius:9px;padding:12px">
+    <div class="row">
+      <input type="text" data-k="name" value="${esc(a.name)}" placeholder="Nome (ex.: Vendas)" required style="flex:1">
+      <input type="text" data-k="model" value="${esc(a.model)}" list="modelList" placeholder="Modelo (vazio = o da conta)" style="flex:2">
+      <button type="button" class="btn icon" data-rm title="Remover">✕</button>
+    </div>
+    <div class="field"><input type="text" data-k="description" value="${esc(a.description)}" placeholder="Quando usar: o roteador escolhe por esta descrição (ex.: preços, pedidos e prazos)"></div>
+    <div class="field"><textarea data-k="system_prompt" style="min-height:90px" placeholder="Instruções só deste agente. Entram depois do prompt da conta.">${esc(a.system_prompt)}</textarea></div>
+  </div>`;
+$('#addAgent').onclick = () => { $('#agents').insertAdjacentHTML('beforeend', agentRow()); $('#agents').lastElementChild.querySelector('input').focus(); };
+$('#agents').onclick = e => { if (e.target.hasAttribute('data-rm')) e.target.closest('.agent').remove(); };
+const readAgents = () => [...document.querySelectorAll('#agents .agent')].map(el =>
+  Object.fromEntries([...el.querySelectorAll('[data-k]')].map(i => [i.dataset.k, i.value.trim()])));
 
 // ---------- pairing ----------
 let loginTimer = null;

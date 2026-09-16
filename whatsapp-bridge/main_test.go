@@ -64,3 +64,28 @@ func TestMigrateOldSchema(t *testing.T) {
 		t.Fatalf("expected 2 chats for same jid, got %d", n)
 	}
 }
+
+func TestAgentsRoundTrip(t *testing.T) {
+	store, err := NewMessageStore(filepath.Join(t.TempDir(), "messages.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	want := []Agent{{Name: "Vendas", Description: "precos"}, {Name: "Suporte", SystemPrompt: "ajude", Model: "x/y"}}
+	if err := store.SetAgents("5511", want); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetAgents("5511", want[1:]); err != nil { // replace, not append
+		t.Fatal(err)
+	}
+	got, err := store.ListAgents("5511")
+	if err != nil || len(got) != 1 || got[0] != want[1] {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if err := store.SetAgents("5511", []Agent{{Name: "a"}, {Name: "a"}}); err == nil {
+		t.Fatal("duplicate names must fail")
+	}
+	if got, _ := store.ListAgents("5511"); len(got) != 1 { // failed replace rolled back
+		t.Fatalf("rollback lost, got %+v", got)
+	}
+}
