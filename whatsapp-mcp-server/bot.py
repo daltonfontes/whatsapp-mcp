@@ -248,7 +248,8 @@ def main():
             try:
                 answer, who = reply(cfg, agents(db, account), history(db, account, chat))  # historico ja tem as msgs acumuladas
             except Exception as e:  # modelo free fora do ar / rate limit: pula, nao derruba o bot
-                print(f"[{account}] {chat} <- {texts!r} -> erro no modelo: {e}", flush=True)
+                body = getattr(getattr(e, "response", None), "text", "")[:300]  # o OpenRouter explica o erro no corpo
+                print(f"[{account}] {chat} <- {texts!r} -> erro no modelo: {e} {body}", flush=True)
                 continue
             ok, msg = send_message(chat, PREFIX + answer, account)
             print(f"[{account}] {chat} <- {texts!r} -> [{who or 'conta'}] {answer!r} ({ok} {msg})", flush=True)
