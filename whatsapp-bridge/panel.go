@@ -31,10 +31,26 @@ type BotConfig struct {
 type ChatRow struct {
 	JID             string    `json:"jid"`
 	Phone           string    `json:"phone"` // resolved from the LID map for @lid chats
-	Name            string    `json:"name"`
+	Name            string    `json:"name"`  // as seen on WhatsApp
+	ContactName     string    `json:"contact_name"`
+	Notes           string    `json:"notes"`
 	LastMessageTime time.Time `json:"last_message_time"`
 	LastMessage     string    `json:"last_message"`
+	LastFromMe      bool      `json:"last_from_me"`
 	Paused          bool      `json:"paused"`
+}
+
+type Contact struct {
+	Name  string `json:"name"`
+	Notes string `json:"notes"`
+}
+
+func (store *MessageStore) SetContact(account, chatJID string, c Contact) error {
+	_, err := store.db.Exec(
+		"INSERT OR REPLACE INTO contacts (account_id, jid, name, notes) VALUES (?, ?, ?, ?)",
+		account, chatJID, c.Name, c.Notes,
+	)
+	return err
 }
 
 type MessageRow struct {
@@ -77,10 +93,13 @@ func (store *MessageStore) SetPaused(account, chatJID string, paused bool) error
 
 func (store *MessageStore) ListChats(account string, limit int) ([]ChatRow, error) {
 	rows, err := store.db.Query(`
-		SELECT c.jid, COALESCE(c.name, ''), c.last_message_time,
-			COALESCE((SELECT content FROM messages m WHERE m.account_id = c.account_id AND m.chat_jid = c.jid ORDER BY m.timestamp DESC LIMIT 1), ''),
+		SELECT c.jid, COALESCE(c.name, ''), COALESCE(k.name, ''), COALESCE(k.notes, ''), c.last_message_time,
+			COALESCE(m.content, ''), COALESCE(m.is_from_me, 0),
 			EXISTS(SELECT 1 FROM bot_paused_chats p WHERE p.account_id = c.account_id AND p.chat_jid = c.jid)
-		FROM chats c WHERE c.account_id = ? ORDER BY c.last_message_time DESC LIMIT ?`, account, limit)
+		FROM chats c
+		LEFT JOIN contacts k ON k.account_id = c.account_id AND k.jid = c.jid
+		LEFT JOIN messages m ON m.rowid = (SELECT rowid FROM messages WHERE account_id = c.account_id AND chat_jid = c.jid ORDER BY timestamp DESC LIMIT 1)
+		WHERE c.account_id = ? ORDER BY c.last_message_time DESC LIMIT ?`, account, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +107,7 @@ func (store *MessageStore) ListChats(account string, limit int) ([]ChatRow, erro
 	out := []ChatRow{}
 	for rows.Next() {
 		var c ChatRow
-		if err := rows.Scan(&c.JID, &c.Name, &c.LastMessageTime, &c.LastMessage, &c.Paused); err != nil {
+		if err := rows.Scan(&c.JID, &c.Name, &c.ContactName, &c.Notes, &c.LastMessageTime, &c.LastMessage, &c.LastFromMe, &c.Paused); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -249,6 +268,19 @@ func registerPanel(mux *http.ServeMux, bridge *Bridge) {
 			return
 		}
 		writeJSON(w, http.StatusOK, msgs)
+	})
+
+	mux.HandleFunc("PUT /api/accounts/{id}/chats/{jid}/contact", func(w http.ResponseWriter, r *http.Request) {
+		var c Contact
+		if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+			http.Error(w, "name and notes expected", http.StatusBadRequest)
+			return
+		}
+		if err := store.SetContact(r.PathValue("id"), r.PathValue("jid"), c); err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, c)
 	})
 
 	for _, m := range []struct {
