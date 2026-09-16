@@ -153,7 +153,7 @@ The bridge serves a panel at `http://<bridge>:8080/` (published on `127.0.0.1:80
 From the panel you can:
 
 - Pair a new account by scanning the QR code on screen
-- Edit each account's bot settings (`enabled`, `model`, `system_prompt`, `allowed`); the bot picks changes up on its next reply
+- Edit each account's bot settings (`enabled`, `model`, `system_prompt`, `allowed`); the bot picks changes up on its next reply. The model field offers the free OpenRouter models in a dropdown and still accepts any id or preset typed by hand
 - Browse recent chats and messages, and pause or resume the bot per chat
 - Disconnect an account
 
@@ -161,6 +161,7 @@ Panel endpoints, all under the same token:
 
 | Method | Route |
 |--------|-------|
+| GET | `/api/models` (OpenRouter models with zero price, cached for an hour) |
 | GET / PUT | `/api/accounts/{id}/bot` |
 | GET | `/api/accounts/{id}/chats?limit=50` |
 | GET | `/api/accounts/{id}/chats/{jid}/messages?limit=50` |

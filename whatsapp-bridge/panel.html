@@ -27,7 +27,8 @@
   button.secondary { background: #fff; color: var(--accent); }
   button.danger { background: #fff; color: var(--danger); border-color: var(--danger); }
   label { display: block; margin: 10px 0 4px; font-weight: 600; }
-  input[type=text], textarea { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  input[type=text], textarea, select { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; background: #fff; }
+  select { margin-bottom: 6px; }
   textarea { resize: vertical; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
   #qr { width: 240px; height: 240px; display: block; margin: 12px auto; }
@@ -60,8 +61,9 @@
     <form id="cfg">
       <label><input type="checkbox" name="enabled"> Bot ligado</label>
       <p id="cfgHint" class="muted" hidden>Esta conta ainda não tem configuração salva: o bot vai usar os valores padrão do ambiente até você salvar aqui.</p>
-      <label for="model">Modelo</label>
-      <input type="text" id="model" name="model" required placeholder="@preset/whatsapp-responde ou openai/gpt-4o-mini">
+      <label for="modelSel">Modelo</label>
+      <select id="modelSel"><option value="">Escolher um modelo gratuito da OpenRouter…</option></select>
+      <input type="text" id="model" name="model" required placeholder="ou digite: @preset/whatsapp-responde, openai/gpt-4o-mini...">
       <label for="system_prompt">System prompt</label>
       <textarea id="system_prompt" name="system_prompt" rows="7" placeholder="Você é o atendimento da loja X..."></textarea>
       <label for="allowed">Só responde para</label>
@@ -133,6 +135,7 @@ async function select(id) {
   const c = await api('GET', `/api/accounts/${encodeURIComponent(id)}/bot`);
   const f = $('#cfg');
   f.enabled.checked = c.enabled; f.model.value = c.model; f.system_prompt.value = c.system_prompt; f.allowed.value = c.allowed;
+  $('#modelSel').value = c.model; // fica em branco se o modelo atual nao e um dos gratuitos
   $('#cfgHint').hidden = c.exists;
   await loadChats();
 }
@@ -203,12 +206,23 @@ $('#newAcc').onclick = async () => {
   }, 2000);
 };
 
+async function loadModels() {
+  const models = await api('GET', '/api/models');
+  const fmtCtx = n => n >= 1000 ? Math.round(n / 1000) + 'k ctx' : n + ' ctx';
+  $('#modelSel').insertAdjacentHTML('beforeend', models.map(m =>
+    `<option value="${esc(m.id)}">${esc(m.name)} · ${fmtCtx(m.context_length)}</option>`).join(''));
+  $('#modelSel').value = $('#model').value;
+}
+$('#modelSel').onchange = e => { if (e.target.value) $('#model').value = e.target.value; };
+$('#model').oninput = e => { $('#modelSel').value = e.target.value; };
+
 $('#tokenBtn').onclick = () => {
   const t = prompt('BRIDGE_TOKEN (vazio = sem autenticação):', token);
   if (t !== null) { token = t; localStorage.setItem('bridge_token', token); loadAccounts(); }
 };
 
 loadAccounts().catch(err => $('#status').textContent = err.message);
+loadModels().catch(() => {}); // sem internet ou OpenRouter fora: o campo de texto continua valendo
 setInterval(() => loadAccounts().catch(() => {}), 15000);
 </script>
 </body>
